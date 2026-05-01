@@ -571,11 +571,16 @@ class GloBirdBillingPeriodDaysSensor(GloBirdServiceBaseSensor):
 
     @property
     def native_value(self) -> Any:
-        """Return days elapsed since billing period start."""
+        """Return days of completed data since billing period start.
+
+        Excludes today because GloBird's usage/cost data only covers
+        through end of yesterday — keeps this sensor consistent with
+        Billing Period Cost and the daily usage/cost sensors.
+        """
         start = _billing_period_start(self.coordinator.data or {})
         if start is None:
             return None
-        return (date.today() - start).days + 1
+        return max(0, (date.today() - start).days)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
