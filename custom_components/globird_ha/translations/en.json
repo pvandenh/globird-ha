@@ -61,10 +61,12 @@
       "latest_day_cost": {
         "name": "Latest Daily Cost"
       },
+      "expected_month_cost": {
+        "name": "Expected Monthly Cost"
+      },
       "weather_summary": {
         "name": "Weather Summary"
       }
     }
   }
 }
-

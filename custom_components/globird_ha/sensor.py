@@ -174,6 +174,7 @@ async def async_setup_entry(
                 GloBirdLatestDaySolarExportSensor(coordinator, config_entry, service),
                 GloBirdCostTotalSensor(coordinator, config_entry, service),
                 GloBirdLatestDayCostSensor(coordinator, config_entry, service),
+                GloBirdExpectedMonthlyCostSensor(coordinator, config_entry, service),
                 GloBirdBillingPeriodDaysSensor(coordinator, config_entry, service),
                 GloBirdBillingPeriodCostSensor(coordinator, config_entry, service),
                 GloBirdWeatherSummarySensor(coordinator, config_entry, service),
@@ -398,6 +399,11 @@ class GloBirdUsageTotalSensor(GloBirdServiceBaseSensor):
                 "days": summary.get("days"),
                 "latest_day": summary.get("latest_day"),
                 "daily": summary.get("daily", []),
+                "registers": [
+                    register
+                    for register in summary.get("registers", [])
+                    if register.get("direction") == "import"
+                ],
             }
         )
         return attrs
@@ -429,6 +435,11 @@ class GloBirdLatestDayUsageSensor(GloBirdServiceBaseSensor):
             {
                 "latest_day": summary.get("latest_day"),
                 "latest_intervals": summary.get("latest_intervals", []),
+                "registers": [
+                    register
+                    for register in summary.get("registers", [])
+                    if register.get("direction") == "import"
+                ],
             }
         )
         return attrs
@@ -459,6 +470,11 @@ class GloBirdSolarExportTotalSensor(GloBirdServiceBaseSensor):
                 "days": summary.get("days"),
                 "latest_day": summary.get("latest_day"),
                 "daily": summary.get("export_daily", []),
+                "registers": [
+                    register
+                    for register in summary.get("registers", [])
+                    if register.get("direction") == "export"
+                ],
             }
         )
         return attrs
@@ -487,6 +503,11 @@ class GloBirdLatestDaySolarExportSensor(GloBirdServiceBaseSensor):
         attrs.update(
             {
                 "latest_day": summary.get("latest_day"),
+                "registers": [
+                    register
+                    for register in summary.get("registers", [])
+                    if register.get("direction") == "export"
+                ],
             }
         )
         return attrs
@@ -518,6 +539,7 @@ class GloBirdCostTotalSensor(GloBirdServiceBaseSensor):
                 "total_quantity": summary.get("total_quantity"),
                 "latest_day": summary.get("latest_day"),
                 "daily": summary.get("daily", []),
+                "categories": summary.get("categories", []),
             }
         )
         return attrs
@@ -546,6 +568,38 @@ class GloBirdLatestDayCostSensor(GloBirdServiceBaseSensor):
         attrs = self._service_attrs()
         summary = self._service_detail().get("cost_summary") or {}
         attrs["latest_day"] = summary.get("latest_day")
+        return attrs
+
+
+class GloBirdExpectedMonthlyCostSensor(GloBirdServiceBaseSensor):
+    """Projected cost for the current calendar month."""
+
+    sensor_key = "expected_month_cost"
+    sensor_name = "Expected Monthly Cost"
+    icon = "mdi:cash-calendar"
+    native_unit_of_measurement = CURRENCY_AUD
+    device_class = SensorDeviceClass.MONETARY
+    state_class = None
+
+    @property
+    def native_value(self) -> Any:
+        """Return projected current-month cost."""
+        projected = (self._service_detail().get("cost_summary") or {}).get(
+            "projected_month"
+        ) or {}
+        return projected.get("projected_cost")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return projected monthly cost calculation inputs."""
+        attrs = self._service_attrs()
+        projected = (self._service_detail().get("cost_summary") or {}).get(
+            "projected_month"
+        ) or {}
+        attrs.update(projected)
+        attrs["calculation"] = (
+            "current_month_cost_to_date / completed_days * days_in_month"
+        )
         return attrs
 
 

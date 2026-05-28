@@ -15,7 +15,6 @@ DEFAULT_INVOICE_LIMIT = 20
 DEFAULT_INVOICE_MONTHS = 12
 
 ACCOUNT_UPDATE_INTERVAL = timedelta(minutes=30)
-DETAIL_UPDATE_INTERVAL = timedelta(hours=6)
 
 STORAGE_VERSION = 1
 
@@ -39,4 +38,3 @@ SENSITIVE_KEYS = {
     "siteIdentifier",
     "streetAddress",
 }
-

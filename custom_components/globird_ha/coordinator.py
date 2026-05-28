@@ -24,7 +24,6 @@ from .const import (
     CONF_EMAIL,
     CONF_PASSWORD,
     DEFAULT_USAGE_DAYS,
-    DETAIL_UPDATE_INTERVAL,
     DOMAIN,
     STORAGE_VERSION,
 )
@@ -57,7 +56,6 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._cache: dict[str, Any] | None = None
         self._initialized = False
-        self._last_detail_refresh = 0.0
 
     async def async_shutdown(self) -> None:
         """Close resources."""
@@ -174,23 +172,20 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             finally:
                 self.client.enable_reauth()
 
-            service_data = dict(cache.get("service_data", {}))
-            now = time.time()
-            should_refresh_detail = (
-                not service_data
-                or now - self._last_detail_refresh >= DETAIL_UPDATE_INTERVAL.total_seconds()
+            cached_service_data = cache.get("service_data", {})
+            cached_service_data = (
+                cached_service_data if isinstance(cached_service_data, dict) else {}
             )
-
-            if should_refresh_detail:
-                service_data = {}
-                for service in services:
-                    sid = service_id(service)
-                    service_data[sid] = await self._fetch_service_detail(
-                        service,
-                        data.get("read_meters"),
-                        data.get("service_status"),
-                    )
-                self._last_detail_refresh = now
+            service_data = {}
+            for service in services:
+                sid = service_id(service)
+                cached_detail = cached_service_data.get(sid)
+                service_data[sid] = await self._fetch_service_detail(
+                    service,
+                    data.get("read_meters"),
+                    data.get("service_status"),
+                    cached_detail if isinstance(cached_detail, dict) else {},
+                )
 
             data["service_data"] = service_data
 
@@ -214,6 +209,7 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         service: dict[str, Any],
         meters_payload: dict[str, Any] | None,
         status_payload: dict[str, Any] | None,
+        cache: dict[str, Any],
     ) -> dict[str, Any]:
         """Fetch heavier per-service detail."""
         sid = service_id(service)
@@ -234,7 +230,7 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         usage = None
         if identifier and serial_number:
             usage = await self._fetch_optional(
-                f"usage_{sid}",
+                "usage",
                 lambda: self.client.get_usage(
                     identifier=str(identifier),
                     serial_number=str(serial_number),
@@ -242,33 +238,33 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     is_smart=is_smart,
                     days=DEFAULT_USAGE_DAYS,
                 ),
-                {},
+                cache,
             )
 
         cost = None
         if identifier and account_service_id:
             cost = await self._fetch_optional(
-                f"cost_{sid}",
+                "cost",
                 lambda: self.client.get_cost_detail(
                     account_service_id=account_service_id,
                     identifier=str(identifier),
                     is_smart=is_smart,
                     days=DEFAULT_USAGE_DAYS,
                 ),
-                {},
+                cache,
             )
 
         weather = None
         post_code = service.get("postCode")
         if post_code and account_service_id:
             weather = await self._fetch_optional(
-                f"weather_{sid}",
+                "weather",
                 lambda: self.client.get_weather_data(
                     account_service_id=account_service_id,
                     post_code=str(post_code),
                     days=DEFAULT_USAGE_DAYS,
                 ),
-                {},
+                cache,
             )
 
         return {

@@ -57,9 +57,10 @@ Service-level sensors include:
 - Latest day usage
 - Recent cost total
 - Latest daily cost
+- Expected monthly cost
 - Weather summary
 
-Detailed daily summaries and the latest interval array are exposed as sensor attributes. Full cached snapshots are available through Home Assistant diagnostics with sensitive fields redacted.
+Detailed daily summaries, the latest interval array, all returned usage registers, and cost category totals are exposed as sensor attributes. Full cached snapshots are available through Home Assistant diagnostics with sensitive fields redacted.
 
 ## Notes
 

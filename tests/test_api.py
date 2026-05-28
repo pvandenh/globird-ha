@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import calendar
 import importlib
 import json
 import sys
 import types
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +75,15 @@ class FakeSession:
         return FakeResponse(status, payload)
 
 
+def stub_password_encryption(client: Any) -> None:
+    """Keep auth tests focused on request flow, not RSA encryption."""
+
+    async def fake_encrypt_password(password: str) -> str:
+        return password
+
+    client._encrypt_password = fake_encrypt_password
+
+
 def test_authenticate_success() -> None:
     """Login posts credentials and validates with currentuser."""
     fixtures = load_fixtures()
@@ -83,8 +94,11 @@ def test_authenticate_success() -> None:
         ]
     )
     client = GloBirdClient(session=session, base_url="https://example.test")
+    stub_password_encryption(client)
 
-    result = asyncio.run(client.authenticate("user@example.test", "secret"))
+    result = asyncio.run(
+        client.authenticate("user@example.test", "secret", fresh_session=False)
+    )
 
     assert client.is_authenticated is True
     assert result["data"]["emailAddress"] == "user@example.test"
@@ -93,6 +107,7 @@ def test_authenticate_success() -> None:
     assert session.requests[0][2]["json"] == {
         "emailAddress": "user@example.test",
         "password": "secret",
+        "rememberMe": False,
     }
     assert session.requests[1][1].endswith("/api/account/currentuser")
 
@@ -102,9 +117,12 @@ def test_authenticate_captcha_required() -> None:
     fixtures = load_fixtures()
     session = FakeSession([(200, fixtures["login_captcha"])])
     client = GloBirdClient(session=session, base_url="https://example.test")
+    stub_password_encryption(client)
 
     try:
-        asyncio.run(client.authenticate("user@example.test", "secret"))
+        asyncio.run(
+            client.authenticate("user@example.test", "secret", fresh_session=False)
+        )
     except GloBirdCaptchaRequired:
         pass
     else:
@@ -118,9 +136,12 @@ def test_authenticate_invalid_credentials() -> None:
     fixtures = load_fixtures()
     session = FakeSession([(200, fixtures["login_failure"])])
     client = GloBirdClient(session=session, base_url="https://example.test")
+    stub_password_encryption(client)
 
     try:
-        asyncio.run(client.authenticate("user@example.test", "wrong"))
+        asyncio.run(
+            client.authenticate("user@example.test", "wrong", fresh_session=False)
+        )
     except GloBirdAuthError:
         pass
     else:
@@ -143,9 +164,10 @@ def test_session_expiry_reauthenticates_once() -> None:
         ]
     )
     client = GloBirdClient(session=session, base_url="https://example.test")
+    stub_password_encryption(client)
 
     async def scenario() -> dict[str, Any]:
-        await client.authenticate("user@example.test", "secret")
+        await client.authenticate("user@example.test", "secret", fresh_session=False)
         return await client.get_balance()
 
     result = asyncio.run(scenario())
@@ -205,6 +227,142 @@ def test_cost_summary_net_daily_is_sum_not_last_row() -> None:
     assert cost["latest_day_amount"] == -1.51
 
 
+def test_usage_summary_tracks_all_registers_and_b_exports() -> None:
+    """Usage summaries expose all returned registers and treat B* suffixes as export."""
+    payload = {
+        "data": [
+            {
+                "readDate": "2026-04-24",
+                "usage": 3.0,
+                "suffix": "E1",
+                "chargeType": "Peak",
+                "chargeCategoryCode": "USAGE",
+                "usageArray": [1.0, 2.0],
+            },
+            {
+                "readDate": "2026-04-24",
+                "usage": 1.0,
+                "suffix": "E2",
+                "chargeType": "Controlled Load",
+                "chargeCategoryCode": "CONTROL",
+                "usageArray": [0.25, 0.75],
+            },
+            {
+                "readDate": "2026-04-24",
+                "usage": 2.5,
+                "suffix": "B2",
+                "chargeType": "Super Export",
+                "chargeCategoryCode": "SOLAR",
+                "usageArray": [1.5, 1.0],
+            },
+        ],
+        "message": None,
+        "success": True,
+    }
+
+    usage = build_usage_summary(payload)
+
+    assert usage["total_usage"] == 4.0
+    assert usage["latest_day_usage"] == 4.0
+    assert usage["total_export"] == 2.5
+    assert usage["latest_day_export"] == 2.5
+    assert [register["key"] for register in usage["registers"]] == [
+        "B2-Super Export",
+        "E1-Peak",
+        "E2-Controlled Load",
+    ]
+    assert usage["registers"][0]["direction"] == "export"
+    assert usage["registers"][2]["chargeCategoryCode"] == "CONTROL"
+
+
+def test_cost_summary_exposes_new_category_totals() -> None:
+    """Cost summaries preserve newer GloBird categories separately."""
+    payload = {
+        "data": [
+            {
+                "chargeCategory": "USAGE",
+                "date": "2026/04/24",
+                "amount": 1.2,
+                "quantity": 3.0,
+            },
+            {
+                "chargeCategory": "SOLAR",
+                "date": "2026/04/24",
+                "amount": -0.5,
+                "quantity": 2.0,
+            },
+            {
+                "chargeCategory": "Super Export top up",
+                "date": "2026/04/24",
+                "amount": -0.8,
+                "quantity": 2.0,
+            },
+            {
+                "chargeCategory": "ZEROHERO Credit",
+                "date": "2026/04/24",
+                "amount": -0.3,
+                "quantity": 0.0,
+            },
+        ],
+        "message": None,
+        "success": True,
+    }
+
+    cost = build_cost_summary(payload)
+
+    assert cost["total_amount"] == -0.4
+    assert cost["latest_day_amount"] == -0.4
+    assert cost["categories"] == [
+        {"chargeCategory": "SOLAR", "amount": -0.5, "quantity": 2.0},
+        {"chargeCategory": "Super Export top up", "amount": -0.8, "quantity": 2.0},
+        {"chargeCategory": "USAGE", "amount": 1.2, "quantity": 3.0},
+        {"chargeCategory": "ZEROHERO Credit", "amount": -0.3, "quantity": 0.0},
+    ]
+
+
+def test_cost_summary_projects_current_month_cost() -> None:
+    """Current-month projection extrapolates completed daily cost rows."""
+    today = date.today()
+    day_1 = today.replace(day=1)
+    day_2 = day_1 + timedelta(days=1) if today.day > 1 else day_1
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+    payload = {
+        "data": [
+            {
+                "chargeCategory": "USAGE",
+                "date": day_1.strftime("%Y/%m/%d"),
+                "amount": 2.0,
+                "quantity": 4.0,
+            },
+            {
+                "chargeCategory": "SUPPLY",
+                "date": day_1.strftime("%Y/%m/%d"),
+                "amount": 1.0,
+                "quantity": 0.0,
+            },
+            {
+                "chargeCategory": "SOLAR",
+                "date": day_2.strftime("%Y/%m/%d"),
+                "amount": -1.0,
+                "quantity": 2.0,
+            },
+        ],
+        "message": None,
+        "success": True,
+    }
+
+    cost = build_cost_summary(payload)
+
+    assert cost["projected_month"] == {
+        "month": today.strftime("%Y-%m"),
+        "cost_to_date": 2.0,
+        "projected_cost": round(2.0 / day_2.day * days_in_month, 2),
+        "completed_days": day_2.day,
+        "days_in_month": days_in_month,
+        "latest_day": day_2.isoformat(),
+    }
+
+
 def test_redact_sensitive_diagnostics() -> None:
     """Diagnostics redaction removes credentials and account identifiers."""
     payload = {
@@ -237,6 +395,10 @@ def load_tests(
         test_authenticate_invalid_credentials,
         test_session_expiry_reauthenticates_once,
         test_extract_accounts_services_and_summaries,
+        test_cost_summary_net_daily_is_sum_not_last_row,
+        test_usage_summary_tracks_all_registers_and_b_exports,
+        test_cost_summary_exposes_new_category_totals,
+        test_cost_summary_projects_current_month_cost,
         test_redact_sensitive_diagnostics,
     ):
         suite.addTest(unittest.FunctionTestCase(test_func))

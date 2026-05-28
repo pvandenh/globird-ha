@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import calendar
 import html
 import json
 import logging
@@ -67,6 +68,19 @@ def _date_key(value: dict[str, Any], *keys: str) -> str:
         if found:
             return str(found)
     return ""
+
+
+def _parse_date(value: Any) -> date | None:
+    """Parse a portal date value."""
+    if not value:
+        return None
+    raw = str(value).split("T")[0]
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 
 def redact_sensitive(value: Any) -> Any:
@@ -251,6 +265,47 @@ def _build_register_summary(
     }
 
 
+def _usage_register_key(row: dict[str, Any]) -> str:
+    """Return the portal's display key for a usage register row."""
+    parts = [
+        str(row.get("suffix") or "").strip(),
+        str(row.get("chargeType") or "").strip(),
+    ]
+    key = "-".join(part for part in parts if part)
+    return key or "unknown"
+
+
+def _is_export_register(row: dict[str, Any]) -> bool:
+    """Return whether a usage row represents export/feed-in energy."""
+    return str(row.get("suffix") or "").upper().startswith("B")
+
+
+def _build_usage_register_summaries(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build summaries for every returned usage register/category."""
+    by_register: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_register.setdefault(_usage_register_key(row), []).append(row)
+
+    summaries: list[dict[str, Any]] = []
+    for key in sorted(by_register):
+        register_rows = by_register[key]
+        first = register_rows[0]
+        summary = _build_register_summary(register_rows)
+        summaries.append(
+            {
+                "key": key,
+                "suffix": first.get("suffix"),
+                "chargeType": first.get("chargeType"),
+                "chargeCategoryCode": first.get("chargeCategoryCode"),
+                "direction": "export" if _is_export_register(first) else "import",
+                **summary,
+            }
+        )
+    return summaries
+
+
 def build_usage_summary(
     usage_payload: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -270,24 +325,26 @@ def build_usage_summary(
             "total_export": None,
             "latest_day_export": None,
             "export_daily": [],
+            "registers": [],
         }
 
-    e1_rows = [r for r in rows if str(r.get("suffix") or "").upper() != "B1"]
-    b1_rows = [r for r in rows if str(r.get("suffix") or "").upper() == "B1"]
+    import_rows = [r for r in rows if not _is_export_register(r)]
+    export_rows = [r for r in rows if _is_export_register(r)]
 
-    e1 = _build_register_summary(e1_rows)
-    b1 = _build_register_summary(b1_rows)
+    import_summary = _build_register_summary(import_rows)
+    export_summary = _build_register_summary(export_rows)
 
     return {
-        "days": e1["days"],
-        "total_usage": e1["total"],
-        "latest_day": e1["latest_day"],
-        "latest_day_usage": e1["latest_day_usage"],
-        "daily": e1["daily"],
-        "latest_intervals": e1["latest_intervals"],
-        "total_export": b1["total"],
-        "latest_day_export": b1["latest_day_usage"],
-        "export_daily": b1["daily"],
+        "days": import_summary["days"],
+        "total_usage": import_summary["total"],
+        "latest_day": import_summary["latest_day"],
+        "latest_day_usage": import_summary["latest_day_usage"],
+        "daily": import_summary["daily"],
+        "latest_intervals": import_summary["latest_intervals"],
+        "total_export": export_summary["total"],
+        "latest_day_export": export_summary["latest_day_usage"],
+        "export_daily": export_summary["daily"],
+        "registers": _build_usage_register_summaries(rows),
     }
 
 
@@ -298,6 +355,7 @@ def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
         rows = []
 
     daily: list[dict[str, Any]] = []
+    categories: dict[str, dict[str, Any]] = {}
     total_amount = 0.0
     total_quantity = 0.0
     latest_date_key = ""
@@ -305,8 +363,17 @@ def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
     for row in rows:
         amount = _as_float(row.get("amount")) or 0.0
         quantity = _as_float(row.get("quantity")) or 0.0
+        category = str(row.get("chargeCategory") or "unknown")
         total_amount += amount
         total_quantity += quantity
+        if category not in categories:
+            categories[category] = {
+                "chargeCategory": row.get("chargeCategory"),
+                "amount": 0.0,
+                "quantity": 0.0,
+            }
+        categories[category]["amount"] += amount
+        categories[category]["quantity"] += quantity
         daily.append(
             {
                 "date": row.get("date"),
@@ -336,6 +403,60 @@ def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
         "latest_day": latest_day,
         "latest_day_amount": latest_day_amount,
         "daily": daily,
+        "projected_month": _build_projected_month_summary(daily),
+        "categories": [
+            {
+                "chargeCategory": value["chargeCategory"],
+                "amount": _round(value["amount"], 2),
+                "quantity": _round(value["quantity"]),
+            }
+            for _, value in sorted(categories.items())
+        ],
+    }
+
+
+def _build_projected_month_summary(
+    daily: list[dict[str, Any]],
+    today: date | None = None,
+) -> dict[str, Any]:
+    """Project the current calendar month from completed daily cost rows."""
+    today = today or date.today()
+    month_start = today.replace(day=1)
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+
+    daily_totals: dict[date, float] = {}
+    for row in daily:
+        row_date = _parse_date(row.get("date"))
+        if row_date is None or row_date < month_start or row_date > today:
+            continue
+        daily_totals[row_date] = daily_totals.get(row_date, 0.0) + (
+            _as_float(row.get("amount")) or 0.0
+        )
+
+    if not daily_totals:
+        return {
+            "month": month_start.strftime("%Y-%m"),
+            "cost_to_date": None,
+            "projected_cost": None,
+            "completed_days": 0,
+            "days_in_month": days_in_month,
+            "latest_day": None,
+        }
+
+    latest_day = max(daily_totals)
+    completed_days = latest_day.day
+    cost_to_date = sum(daily_totals.values())
+    projected_cost = (
+        cost_to_date / completed_days * days_in_month if completed_days else None
+    )
+
+    return {
+        "month": month_start.strftime("%Y-%m"),
+        "cost_to_date": _round(cost_to_date, 2),
+        "projected_cost": _round(projected_cost, 2),
+        "completed_days": completed_days,
+        "days_in_month": days_in_month,
+        "latest_day": latest_day.isoformat(),
     }
 
 
