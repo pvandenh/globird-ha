@@ -83,6 +83,21 @@ def _parse_date(value: Any) -> date | None:
     return None
 
 
+def _cost_category(row: dict[str, Any]) -> str:
+    """Return a normalized cost category name."""
+    return str(row.get("chargeCategory") or "unknown").strip()
+
+
+def _is_supply_cost(row: dict[str, Any]) -> bool:
+    """Return whether a cost row is only the fixed supply charge."""
+    return _cost_category(row).upper() == "SUPPLY"
+
+
+def _is_complete_cost_day(rows: list[dict[str, Any]]) -> bool:
+    """Return whether a day has more than the early fixed supply-charge row."""
+    return any(not _is_supply_cost(row) for row in rows)
+
+
 def redact_sensitive(value: Any) -> Any:
     """Redact sensitive portal data for diagnostics."""
     if isinstance(value, list):
@@ -355,17 +370,44 @@ def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
         rows = []
 
     daily: list[dict[str, Any]] = []
+    available_daily: list[dict[str, Any]] = []
     categories: dict[str, dict[str, Any]] = {}
     total_amount = 0.0
     total_quantity = 0.0
-    latest_date_key = ""
+    grouped_rows: dict[str, list[dict[str, Any]]] = {}
+
+    for raw_row in rows:
+        dk = _date_key(raw_row, "date")
+        if dk:
+            grouped_rows.setdefault(dk, []).append(raw_row)
+
+    complete_days = {
+        day
+        for day, day_rows in grouped_rows.items()
+        if _is_complete_cost_day(day_rows)
+    }
+    latest_available_day = max(grouped_rows) if grouped_rows else None
+    latest_day = max(complete_days) if complete_days else None
 
     for row in rows:
         amount = _as_float(row.get("amount")) or 0.0
         quantity = _as_float(row.get("quantity")) or 0.0
-        category = str(row.get("chargeCategory") or "unknown")
+        dk = _date_key(row, "date")
+        item = {
+            "date": row.get("date"),
+            "amount": _round(amount, 2),
+            "quantity": _round(quantity),
+            "chargeCategory": row.get("chargeCategory"),
+            "chargeType": row.get("chargeType"),
+            "complete": dk in complete_days,
+        }
+        available_daily.append(item)
+        if dk not in complete_days:
+            continue
+
         total_amount += amount
         total_quantity += quantity
+        category = _cost_category(row)
         if category not in categories:
             categories[category] = {
                 "chargeCategory": row.get("chargeCategory"),
@@ -374,27 +416,24 @@ def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
             }
         categories[category]["amount"] += amount
         categories[category]["quantity"] += quantity
-        daily.append(
-            {
-                "date": row.get("date"),
-                "amount": _round(amount, 2),
-                "quantity": _round(quantity),
-                "chargeCategory": row.get("chargeCategory"),
-                "chargeType": row.get("chargeType"),
-            }
-        )
-        dk = _date_key(row, "date")
-        if dk > latest_date_key:
-            latest_date_key = dk
+        daily.append(item)
 
-    latest_day: str | None = latest_date_key or None
-    # GloBird returns multiple rows per day (SOLAR, USAGE, SUPPLY). Sum them all to get
-    # the true net daily cost rather than just the last row (always SUPPLY, a positive charge).
+    # GloBird returns multiple rows per day (SOLAR, USAGE, SUPPLY, etc.). Sum all
+    # complete-day rows so early supply-only rows don't become the latest daily cost.
     latest_day_amount: float | None = None
+    latest_day_zerohero_credit: float | None = None
     if latest_day:
         latest_day_amount = _round(
             sum(e["amount"] for e in daily if e["date"] == latest_day), 2
         )
+        zerohero_total = sum(
+            e["amount"]
+            for e in daily
+            if e["date"] == latest_day
+            and str(e.get("chargeCategory") or "").strip().lower()
+            == "zerohero credit"
+        )
+        latest_day_zerohero_credit = _round(zerohero_total, 2)
 
     return {
         "days": len(daily),
@@ -402,7 +441,17 @@ def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
         "total_quantity": _round(total_quantity),
         "latest_day": latest_day,
         "latest_day_amount": latest_day_amount,
+        "latest_available_day": latest_available_day,
+        "latest_available_day_complete": (
+            latest_available_day is not None and latest_available_day == latest_day
+        ),
+        "latest_day_zerohero_credit": latest_day_zerohero_credit,
+        "latest_day_zerohero_achieved": (
+            latest_day_zerohero_credit is not None and latest_day_zerohero_credit != 0
+        ),
         "daily": daily,
+        "available_daily": available_daily,
+        "incomplete_days": sorted(set(grouped_rows) - complete_days),
         "projected_month": _build_projected_month_summary(daily),
         "categories": [
             {

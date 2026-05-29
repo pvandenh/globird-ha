@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Callable
 
 from homeassistant.components.sensor import (
@@ -94,6 +94,38 @@ def _signup_services_attrs(data: dict[str, Any]) -> dict[str, Any]:
     return {"signup_info": _payload_data(data.get("signup_info")) or []}
 
 
+def _timestamp_value(value: Any) -> datetime | None:
+    """Return a Home Assistant timestamp value from a unix timestamp."""
+    if value is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(value), timezone.utc)
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _last_successful_refresh_value(data: dict[str, Any]) -> datetime | None:
+    return _timestamp_value(data.get("last_update"))
+
+
+def _timestamp_attr(value: Any) -> str | None:
+    timestamp = _timestamp_value(value)
+    return timestamp.isoformat() if timestamp else None
+
+
+def _refresh_status_value(data: dict[str, Any]) -> str:
+    return "error" if data.get("refresh_error") else "ok"
+
+
+def _refresh_status_attrs(data: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "last_successful_refresh": _timestamp_attr(data.get("last_update")),
+        "last_failed_refresh": _timestamp_attr(data.get("last_failed_update")),
+        "refresh_error": data.get("refresh_error"),
+        "fetch_errors": data.get("_fetch_errors") or {},
+    }
+
+
 @dataclass(frozen=True)
 class GloBirdSensorDescription:
     """Description for a GloBird sensor."""
@@ -143,6 +175,20 @@ GLOBAL_SENSORS: tuple[GloBirdSensorDescription, ...] = (
         attrs_fn=_signup_services_attrs,
         icon="mdi:transmission-tower",
     ),
+    GloBirdSensorDescription(
+        key="last_successful_refresh",
+        name="Last Successful Refresh",
+        value_fn=_last_successful_refresh_value,
+        device_class=SensorDeviceClass.TIMESTAMP,
+        icon="mdi:update",
+    ),
+    GloBirdSensorDescription(
+        key="refresh_status",
+        name="Refresh Status",
+        value_fn=_refresh_status_value,
+        attrs_fn=_refresh_status_attrs,
+        icon="mdi:cloud-refresh",
+    ),
 )
 
 
@@ -168,12 +214,14 @@ async def async_setup_entry(
             [
                 GloBirdServiceStatusSensor(coordinator, config_entry, service),
                 GloBirdMeterInfoSensor(coordinator, config_entry, service),
+                GloBirdLatestDataDateSensor(coordinator, config_entry, service),
                 GloBirdUsageTotalSensor(coordinator, config_entry, service),
                 GloBirdLatestDayUsageSensor(coordinator, config_entry, service),
                 GloBirdSolarExportTotalSensor(coordinator, config_entry, service),
                 GloBirdLatestDaySolarExportSensor(coordinator, config_entry, service),
                 GloBirdCostTotalSensor(coordinator, config_entry, service),
                 GloBirdLatestDayCostSensor(coordinator, config_entry, service),
+                GloBirdZeroHeroStatusSensor(coordinator, config_entry, service),
                 GloBirdExpectedMonthlyCostSensor(coordinator, config_entry, service),
                 GloBirdBillingPeriodDaysSensor(coordinator, config_entry, service),
                 GloBirdBillingPeriodCostSensor(coordinator, config_entry, service),
@@ -374,6 +422,45 @@ class GloBirdMeterInfoSensor(GloBirdServiceBaseSensor):
         return attrs
 
 
+class GloBirdLatestDataDateSensor(GloBirdServiceBaseSensor):
+    """Latest complete portal data date for a service."""
+
+    sensor_key = "latest_data_date"
+    sensor_name = "Latest Data Date"
+    icon = "mdi:calendar-check"
+
+    @property
+    def native_value(self) -> Any:
+        """Return the latest complete cost date, falling back to usage date."""
+        detail = self._service_detail()
+        cost_summary = detail.get("cost_summary") or {}
+        usage_summary = detail.get("usage_summary") or {}
+        return cost_summary.get("latest_day") or usage_summary.get("latest_day")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return latest data status attributes."""
+        attrs = self._service_attrs()
+        detail = self._service_detail()
+        cost_summary = detail.get("cost_summary") or {}
+        usage_summary = detail.get("usage_summary") or {}
+        attrs.update(
+            {
+                "latest_usage_day": usage_summary.get("latest_day"),
+                "latest_cost_day": cost_summary.get("latest_day"),
+                "latest_available_cost_day": cost_summary.get("latest_available_day"),
+                "latest_available_cost_day_complete": cost_summary.get(
+                    "latest_available_day_complete"
+                ),
+                "incomplete_cost_days": cost_summary.get("incomplete_days", []),
+                "last_successful_refresh": _timestamp_attr(
+                    (self.coordinator.data or {}).get("last_update")
+                ),
+            }
+        )
+        return attrs
+
+
 class GloBirdUsageTotalSensor(GloBirdServiceBaseSensor):
     """Recent usage total sensor."""
 
@@ -538,7 +625,13 @@ class GloBirdCostTotalSensor(GloBirdServiceBaseSensor):
                 "days": summary.get("days"),
                 "total_quantity": summary.get("total_quantity"),
                 "latest_day": summary.get("latest_day"),
+                "latest_available_day": summary.get("latest_available_day"),
+                "latest_available_day_complete": summary.get(
+                    "latest_available_day_complete"
+                ),
+                "incomplete_days": summary.get("incomplete_days", []),
                 "daily": summary.get("daily", []),
+                "available_daily": summary.get("available_daily", []),
                 "categories": summary.get("categories", []),
             }
         )
@@ -567,7 +660,52 @@ class GloBirdLatestDayCostSensor(GloBirdServiceBaseSensor):
         """Return latest daily cost attributes."""
         attrs = self._service_attrs()
         summary = self._service_detail().get("cost_summary") or {}
-        attrs["latest_day"] = summary.get("latest_day")
+        attrs.update(
+            {
+                "latest_day": summary.get("latest_day"),
+                "latest_available_day": summary.get("latest_available_day"),
+                "latest_available_day_complete": summary.get(
+                    "latest_available_day_complete"
+                ),
+                "zerohero_credit": summary.get("latest_day_zerohero_credit"),
+            }
+        )
+        return attrs
+
+
+class GloBirdZeroHeroStatusSensor(GloBirdServiceBaseSensor):
+    """Latest day ZEROHERO credit status."""
+
+    sensor_key = "zerohero_status"
+    sensor_name = "ZeroHero Status"
+    icon = "mdi:check-decagram"
+
+    @property
+    def native_value(self) -> Any:
+        """Return whether the latest complete day received a ZEROHERO credit."""
+        summary = self._service_detail().get("cost_summary") or {}
+        latest_day = summary.get("latest_day")
+        credit = summary.get("latest_day_zerohero_credit")
+        if latest_day is None or credit is None:
+            return "unknown"
+        return "achieved" if summary.get("latest_day_zerohero_achieved") else "missed"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return ZEROHERO detail attributes."""
+        attrs = self._service_attrs()
+        summary = self._service_detail().get("cost_summary") or {}
+        attrs.update(
+            {
+                "latest_day": summary.get("latest_day"),
+                "zerohero_credit": summary.get("latest_day_zerohero_credit"),
+                "latest_day_cost": summary.get("latest_day_amount"),
+                "latest_available_day": summary.get("latest_available_day"),
+                "latest_available_day_complete": summary.get(
+                    "latest_available_day_complete"
+                ),
+            }
+        )
         return attrs
 
 

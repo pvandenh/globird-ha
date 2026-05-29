@@ -31,14 +31,14 @@
       "latest_invoice": {
         "name": "Latest Invoice"
       },
-      "invoice_count": {
-        "name": "Invoice Count"
-      },
-      "referral_links": {
-        "name": "Referral Links"
-      },
       "signup_services": {
         "name": "Signup Services"
+      },
+      "last_successful_refresh": {
+        "name": "Last Successful Refresh"
+      },
+      "refresh_status": {
+        "name": "Refresh Status"
       },
       "account_summary": {
         "name": "Account Summary"
@@ -49,11 +49,20 @@
       "meter_info": {
         "name": "Meter Info"
       },
+      "latest_data_date": {
+        "name": "Latest Data Date"
+      },
       "usage_total": {
         "name": "Recent Usage Total"
       },
       "latest_day_usage": {
         "name": "Latest Day Usage"
+      },
+      "solar_export_total": {
+        "name": "Recent Solar Export Total"
+      },
+      "latest_day_solar_export": {
+        "name": "Latest Day Solar Export"
       },
       "cost_total": {
         "name": "Recent Cost Total"
@@ -61,8 +70,17 @@
       "latest_day_cost": {
         "name": "Latest Daily Cost"
       },
+      "zerohero_status": {
+        "name": "ZeroHero Status"
+      },
       "expected_month_cost": {
         "name": "Expected Monthly Cost"
+      },
+      "billing_period_days": {
+        "name": "Billing Period Days"
+      },
+      "billing_period_cost": {
+        "name": "Billing Period Cost"
       },
       "weather_summary": {
         "name": "Weather Summary"

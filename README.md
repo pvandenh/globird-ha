@@ -5,7 +5,7 @@
 
 Read-only Home Assistant custom integration for the GloBird Energy customer portal.
 
-This integration logs in to `https://myaccount.globirdenergy.com.au` and exposes account, balance, invoice, meter, usage, cost, referral, and weather data as Home Assistant sensors.
+This integration logs in to `https://myaccount.globirdenergy.com.au` and exposes account, balance, invoice, meter, usage, cost, and weather data as Home Assistant sensors.
 
 ## Install
 
@@ -44,23 +44,39 @@ Account-level sensors include:
 - Account balance
 - Dashboard balance and recent transactions
 - Latest invoice
-- Invoice count
-- Referral links
 - Signup services
+- Last successful refresh
+- Refresh status
 - One account summary sensor per returned account
 
 Service-level sensors include:
 
 - Service status
 - Meter info
+- Latest data date
 - Recent usage total
 - Latest day usage
+- Recent solar export total
+- Latest day solar export
 - Recent cost total
 - Latest daily cost
+- ZeroHero status
 - Expected monthly cost
+- Billing period days
+- Billing period cost
 - Weather summary
 
-Detailed daily summaries, the latest interval array, all returned usage registers, and cost category totals are exposed as sensor attributes. Full cached snapshots are available through Home Assistant diagnostics with sensitive fields redacted.
+Detailed daily summaries, the latest interval array, all returned usage registers, cost category totals, and incomplete cost days are exposed as sensor attributes. Full cached snapshots are available through Home Assistant diagnostics with sensitive fields redacted.
+
+## Updates and data freshness
+
+Home Assistant polls the GloBird portal every 30 minutes. You can also force a check with Home Assistant's standard **Update entity** action on any GloBird entity.
+
+GloBird usage and cost data normally trails by at least one day, and the portal can publish a fixed supply-charge row before the rest of that day's usage/export rows are ready. To avoid showing that early partial value as the latest daily cost, the integration only advances Latest Daily Cost to the newest cost date that has more than the fixed `SUPPLY` row. If a newer incomplete date is visible from the portal, it is exposed in attributes on Latest Data Date and cost sensors as `latest_available_day`, `latest_available_day_complete`, and `incomplete_days`.
+
+ZeroHero status is derived from the latest complete cost day. It reports `achieved` when the cost detail for that day contains a non-zero `ZEROHERO Credit` row, `missed` when the day is complete but no credit was present, and `unknown` before a complete cost day is available.
+
+Pricing/rate-plan sensors are not currently exposed. The portal exposes product metadata, but not enough rate detail has been validated to provide EMHASS-ready import/export price sensors safely.
 
 ## Notes
 

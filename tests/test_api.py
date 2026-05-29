@@ -206,6 +206,8 @@ def test_extract_accounts_services_and_summaries() -> None:
     assert cost["total_quantity"] == 21.5
     # latest_day_amount is the net sum for 2026/04/02: -2.36 + 0.60 + 1.33 = -0.43
     assert cost["latest_day_amount"] == -0.43
+    assert cost["latest_available_day"] == "2026/04/02"
+    assert cost["latest_available_day_complete"] is True
     assert weather["latest_max_temp"] == 29
 
 
@@ -225,6 +227,57 @@ def test_cost_summary_net_daily_is_sum_not_last_row() -> None:
     assert cost["total_amount"] == -1.51
     assert cost["latest_day"] == "2026/04/24"
     assert cost["latest_day_amount"] == -1.51
+    assert cost["latest_available_day_complete"] is True
+
+
+def test_cost_summary_ignores_supply_only_partial_latest_day() -> None:
+    """latest_day ignores a newer supply-only day until usage/export rows arrive."""
+    payload = {
+        "data": [
+            {
+                "chargeCategory": "SOLAR",
+                "chargeType": None,
+                "date": "2026/05/15",
+                "amount": -2.10,
+                "quantity": 14.0,
+            },
+            {
+                "chargeCategory": "USAGE",
+                "chargeType": None,
+                "date": "2026/05/15",
+                "amount": 0.40,
+                "quantity": 3.0,
+            },
+            {
+                "chargeCategory": "SUPPLY",
+                "chargeType": None,
+                "date": "2026/05/15",
+                "amount": 1.24,
+                "quantity": 0.0,
+            },
+            {
+                "chargeCategory": "SUPPLY",
+                "chargeType": None,
+                "date": "2026/05/16",
+                "amount": 1.24,
+                "quantity": 0.0,
+            },
+        ],
+        "message": None,
+        "success": True,
+    }
+
+    cost = build_cost_summary(payload)
+
+    assert cost["latest_available_day"] == "2026/05/16"
+    assert cost["latest_available_day_complete"] is False
+    assert cost["latest_day"] == "2026/05/15"
+    assert cost["latest_day_amount"] == -0.46
+    assert cost["total_amount"] == -0.46
+    assert cost["incomplete_days"] == ["2026/05/16"]
+    assert cost["daily"] == [
+        row for row in cost["available_daily"] if row["date"] == "2026/05/15"
+    ]
 
 
 def test_usage_summary_tracks_all_registers_and_b_exports() -> None:
@@ -312,6 +365,8 @@ def test_cost_summary_exposes_new_category_totals() -> None:
 
     assert cost["total_amount"] == -0.4
     assert cost["latest_day_amount"] == -0.4
+    assert cost["latest_day_zerohero_credit"] == -0.3
+    assert cost["latest_day_zerohero_achieved"] is True
     assert cost["categories"] == [
         {"chargeCategory": "SOLAR", "amount": -0.5, "quantity": 2.0},
         {"chargeCategory": "Super Export top up", "amount": -0.8, "quantity": 2.0},
@@ -396,6 +451,7 @@ def load_tests(
         test_session_expiry_reauthenticates_once,
         test_extract_accounts_services_and_summaries,
         test_cost_summary_net_daily_is_sum_not_last_row,
+        test_cost_summary_ignores_supply_only_partial_latest_day,
         test_usage_summary_tracks_all_registers_and_b_exports,
         test_cost_summary_exposes_new_category_totals,
         test_cost_summary_projects_current_month_cost,
