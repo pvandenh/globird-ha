@@ -31,8 +31,10 @@ GloBirdClient = api.GloBirdClient
 build_cost_summary = api.build_cost_summary
 build_usage_summary = api.build_usage_summary
 build_weather_summary = api.build_weather_summary
+cost_attributes = api.cost_attributes
 extract_accounts_and_services = api.extract_accounts_and_services
 redact_sensitive = api.redact_sensitive
+usage_attributes = api.usage_attributes
 
 
 def load_fixtures() -> dict[str, Any]:
@@ -418,6 +420,54 @@ def test_cost_summary_projects_current_month_cost() -> None:
     }
 
 
+def test_sensor_attributes_are_recorder_safe_summaries() -> None:
+    """Entity attributes keep recent rows only and strip nested register details."""
+    usage_payload = {
+        "data": [
+            {
+                "readDate": (date(2026, 4, 1) + timedelta(days=offset)).isoformat(),
+                "usage": 1.0,
+                "suffix": "E1",
+                "chargeType": "Peak",
+                "chargeCategoryCode": "USAGE",
+                "usageArray": [0.1] * 48,
+            }
+            for offset in range(45)
+        ],
+    }
+    cost_payload = {
+        "data": [
+            {
+                "chargeCategory": category,
+                "date": (date(2026, 4, 1) + timedelta(days=offset)).strftime(
+                    "%Y/%m/%d"
+                ),
+                "amount": amount,
+                "quantity": 1.0,
+            }
+            for offset in range(45)
+            for category, amount in (
+                ("USAGE", 1.1),
+                ("SUPPLY", 1.2),
+                ("SOLAR", -0.4),
+            )
+        ],
+    }
+
+    usage = usage_attributes(build_usage_summary(usage_payload), direction="import")
+    cost = cost_attributes(build_cost_summary(cost_payload))
+
+    assert usage["daily_count"] == 45
+    assert len(usage["daily"]) == 7
+    assert usage["daily_truncated"] is True
+    assert "daily" not in usage["registers"][0]
+    assert len(cost["daily"]) == 7
+    assert len(cost["available_daily"]) == 7
+    assert cost["daily_truncated"] is True
+    assert len(json.dumps(usage)) < 16_384
+    assert len(json.dumps(cost)) < 16_384
+
+
 def test_redact_sensitive_diagnostics() -> None:
     """Diagnostics redaction removes credentials and account identifiers."""
     payload = {
@@ -455,6 +505,7 @@ def load_tests(
         test_usage_summary_tracks_all_registers_and_b_exports,
         test_cost_summary_exposes_new_category_totals,
         test_cost_summary_projects_current_month_cost,
+        test_sensor_attributes_are_recorder_safe_summaries,
         test_redact_sensitive_diagnostics,
     ):
         suite.addTest(unittest.FunctionTestCase(test_func))

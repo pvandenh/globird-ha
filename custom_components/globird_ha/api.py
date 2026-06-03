@@ -20,6 +20,8 @@ from .const import BASE_URL, DEFAULT_USAGE_DAYS, SENSITIVE_KEYS
 
 _LOGGER = logging.getLogger(__name__)
 
+ATTR_RECENT_ROW_LIMIT = 7
+
 
 class GloBirdApiError(Exception):
     """Base GloBird API error."""
@@ -111,6 +113,91 @@ def redact_sensitive(value: Any) -> Any:
                 redacted[key] = redact_sensitive(item)
         return redacted
     return value
+
+
+def _recent_rows(value: Any, limit: int = ATTR_RECENT_ROW_LIMIT) -> list[Any]:
+    """Return the most recent rows from a list for recorder-safe attributes."""
+    if not isinstance(value, list):
+        return []
+    return value[-limit:]
+
+
+def _compact_usage_register(register: dict[str, Any]) -> dict[str, Any]:
+    """Return register metadata without nested daily interval data."""
+    return {
+        "key": register.get("key"),
+        "suffix": register.get("suffix"),
+        "chargeType": register.get("chargeType"),
+        "chargeCategoryCode": register.get("chargeCategoryCode"),
+        "direction": register.get("direction"),
+        "days": register.get("days"),
+        "total": register.get("total"),
+        "latest_day": register.get("latest_day"),
+        "latest_day_usage": register.get("latest_day_usage"),
+    }
+
+
+def _usage_latest_day(summary: dict[str, Any], daily: list[Any]) -> Any:
+    """Return the latest day for a daily usage attribute list."""
+    if daily:
+        latest = daily[-1]
+        if isinstance(latest, dict):
+            return latest.get("readDate")
+    return summary.get("latest_day")
+
+
+def usage_attributes(
+    summary: dict[str, Any],
+    *,
+    direction: str,
+    include_latest_intervals: bool = False,
+) -> dict[str, Any]:
+    """Return recorder-safe usage attributes for import or export sensors."""
+    daily_key = "export_daily" if direction == "export" else "daily"
+    daily = summary.get(daily_key, [])
+    daily_rows = daily if isinstance(daily, list) else []
+    registers = [
+        _compact_usage_register(register)
+        for register in summary.get("registers", [])
+        if isinstance(register, dict) and register.get("direction") == direction
+    ]
+
+    attrs: dict[str, Any] = {
+        "days": len(daily_rows),
+        "latest_day": _usage_latest_day(summary, daily_rows),
+        "daily": _recent_rows(daily_rows),
+        "daily_count": len(daily_rows),
+        "daily_truncated": len(daily_rows) > ATTR_RECENT_ROW_LIMIT,
+        "registers": registers,
+    }
+    if include_latest_intervals:
+        attrs["latest_intervals"] = summary.get("latest_intervals", [])
+    return attrs
+
+
+def cost_attributes(summary: dict[str, Any]) -> dict[str, Any]:
+    """Return recorder-safe cost summary attributes."""
+    daily = summary.get("daily", [])
+    daily_rows = daily if isinstance(daily, list) else []
+    available_daily = summary.get("available_daily", [])
+    available_rows = available_daily if isinstance(available_daily, list) else []
+    return {
+        "days": summary.get("days"),
+        "total_quantity": summary.get("total_quantity"),
+        "latest_day": summary.get("latest_day"),
+        "latest_available_day": summary.get("latest_available_day"),
+        "latest_available_day_complete": summary.get(
+            "latest_available_day_complete"
+        ),
+        "incomplete_days": summary.get("incomplete_days", []),
+        "daily": _recent_rows(daily_rows),
+        "daily_count": len(daily_rows),
+        "daily_truncated": len(daily_rows) > ATTR_RECENT_ROW_LIMIT,
+        "available_daily": _recent_rows(available_rows),
+        "available_daily_count": len(available_rows),
+        "available_daily_truncated": len(available_rows) > ATTR_RECENT_ROW_LIMIT,
+        "categories": summary.get("categories", []),
+    }
 
 
 def extract_accounts_and_services(

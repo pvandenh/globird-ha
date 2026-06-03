@@ -16,7 +16,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import service_id
+from .api import cost_attributes, service_id, usage_attributes
 from .const import DOMAIN
 from .coordinator import GloBirdCoordinator
 
@@ -481,18 +481,7 @@ class GloBirdUsageTotalSensor(GloBirdServiceBaseSensor):
         """Return usage summary attributes."""
         attrs = self._service_attrs()
         summary = self._service_detail().get("usage_summary") or {}
-        attrs.update(
-            {
-                "days": summary.get("days"),
-                "latest_day": summary.get("latest_day"),
-                "daily": summary.get("daily", []),
-                "registers": [
-                    register
-                    for register in summary.get("registers", [])
-                    if register.get("direction") == "import"
-                ],
-            }
-        )
+        attrs.update(usage_attributes(summary, direction="import"))
         return attrs
 
 
@@ -519,15 +508,11 @@ class GloBirdLatestDayUsageSensor(GloBirdServiceBaseSensor):
         attrs = self._service_attrs()
         summary = self._service_detail().get("usage_summary") or {}
         attrs.update(
-            {
-                "latest_day": summary.get("latest_day"),
-                "latest_intervals": summary.get("latest_intervals", []),
-                "registers": [
-                    register
-                    for register in summary.get("registers", [])
-                    if register.get("direction") == "import"
-                ],
-            }
+            usage_attributes(
+                summary,
+                direction="import",
+                include_latest_intervals=True,
+            )
         )
         return attrs
 
@@ -552,18 +537,7 @@ class GloBirdSolarExportTotalSensor(GloBirdServiceBaseSensor):
         """Return solar export summary attributes."""
         attrs = self._service_attrs()
         summary = self._service_detail().get("usage_summary") or {}
-        attrs.update(
-            {
-                "days": summary.get("days"),
-                "latest_day": summary.get("latest_day"),
-                "daily": summary.get("export_daily", []),
-                "registers": [
-                    register
-                    for register in summary.get("registers", [])
-                    if register.get("direction") == "export"
-                ],
-            }
-        )
+        attrs.update(usage_attributes(summary, direction="export"))
         return attrs
 
 
@@ -587,16 +561,7 @@ class GloBirdLatestDaySolarExportSensor(GloBirdServiceBaseSensor):
         """Return latest day attributes."""
         attrs = self._service_attrs()
         summary = self._service_detail().get("usage_summary") or {}
-        attrs.update(
-            {
-                "latest_day": summary.get("latest_day"),
-                "registers": [
-                    register
-                    for register in summary.get("registers", [])
-                    if register.get("direction") == "export"
-                ],
-            }
-        )
+        attrs.update(usage_attributes(summary, direction="export"))
         return attrs
 
 
@@ -620,21 +585,7 @@ class GloBirdCostTotalSensor(GloBirdServiceBaseSensor):
         """Return cost attributes."""
         attrs = self._service_attrs()
         summary = self._service_detail().get("cost_summary") or {}
-        attrs.update(
-            {
-                "days": summary.get("days"),
-                "total_quantity": summary.get("total_quantity"),
-                "latest_day": summary.get("latest_day"),
-                "latest_available_day": summary.get("latest_available_day"),
-                "latest_available_day_complete": summary.get(
-                    "latest_available_day_complete"
-                ),
-                "incomplete_days": summary.get("incomplete_days", []),
-                "daily": summary.get("daily", []),
-                "available_daily": summary.get("available_daily", []),
-                "categories": summary.get("categories", []),
-            }
-        )
+        attrs.update(cost_attributes(summary))
         return attrs
 
 

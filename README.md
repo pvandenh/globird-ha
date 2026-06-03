@@ -66,7 +66,7 @@ Service-level sensors include:
 - Billing period cost
 - Weather summary
 
-Detailed daily summaries, the latest interval array, all returned usage registers, cost category totals, and incomplete cost days are exposed as sensor attributes. Full cached snapshots are available through Home Assistant diagnostics with sensitive fields redacted.
+Recorder-safe daily summaries, the latest interval array, compact usage register totals, cost category totals, and incomplete cost days are exposed as sensor attributes. Daily usage and cost attributes keep the most recent rows and include count/truncation flags; full cached snapshots are available through Home Assistant diagnostics with sensitive fields redacted.
 
 ## Updates and data freshness
 
