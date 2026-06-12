@@ -30,6 +30,29 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Number of 30-minute intervals expected in a fully-published smart-meter day.
+# GloBird publishes a new day's usage entry shortly after midnight, but the
+# interval data may take several more hours to appear.  Only once all 48 slots
+# are present do we consider the day complete and allow sensor updates.
+_USAGE_COMPLETE_INTERVAL_COUNT = 48
+
+
+def _is_usage_complete(usage_summary: dict[str, Any]) -> bool:
+    """Return True if the latest day's usage data appears to be fully published.
+
+    For smart meters the portal returns a ``usageArray`` of 30-minute interval
+    values.  We treat the day as complete only when all 48 half-hour slots are
+    present.  If no interval data is available (basic meter) we fall back to
+    requiring a non-zero ``latest_day_usage`` value.
+    """
+    if not usage_summary or usage_summary.get("latest_day") is None:
+        return False
+    intervals: list[Any] = usage_summary.get("latest_intervals") or []
+    if intervals:
+        return len(intervals) == _USAGE_COMPLETE_INTERVAL_COUNT
+    # Basic meter or no interval data returned: accept any non-zero usage value.
+    return bool(usage_summary.get("latest_day_usage"))
+
 
 class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinator for fetching GloBird portal data."""
@@ -180,12 +203,27 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for service in services:
                 sid = service_id(service)
                 cached_detail = cached_service_data.get(sid)
-                service_data[sid] = await self._fetch_service_detail(
+                fresh_detail = await self._fetch_service_detail(
                     service,
                     data.get("read_meters"),
                     data.get("service_status"),
                     cached_detail if isinstance(cached_detail, dict) else {},
                 )
+                usage_summary = fresh_detail.get("usage_summary") or {}
+                if not _is_usage_complete(usage_summary) and isinstance(cached_detail, dict):
+                    # Usage data for the latest day is not yet fully published
+                    # (partial or zero intervals).  Retain the previously confirmed
+                    # service data so that sensors do not update with partial values.
+                    _LOGGER.debug(
+                        "GloBird service %s: usage data incomplete "
+                        "(latest_day=%s, intervals=%d); retaining cached data.",
+                        sid,
+                        usage_summary.get("latest_day"),
+                        len(usage_summary.get("latest_intervals") or []),
+                    )
+                    service_data[sid] = cached_detail
+                else:
+                    service_data[sid] = fresh_detail
 
             data["service_data"] = service_data
 
