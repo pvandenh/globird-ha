@@ -665,7 +665,7 @@ class GloBirdExpectedMonthlyCostSensor(GloBirdServiceBaseSensor):
 
     sensor_key = "expected_month_cost"
     sensor_name = "Expected Monthly Cost"
-    icon = "mdi:cash-calendar"
+    icon = "mdi:calendar-question"
     native_unit_of_measurement = CURRENCY_AUD
     device_class = SensorDeviceClass.MONETARY
     state_class = None
