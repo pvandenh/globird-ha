@@ -34,18 +34,22 @@ _LOGGER = logging.getLogger(__name__)
 def _is_usage_complete(usage_summary: dict[str, Any]) -> bool:
     """Return True if the latest day's usage data appears fully published.
 
-    GloBird posts a new day's entry to the usage API shortly after midnight,
-    but ``latest_day_usage`` is zero (or absent) until the full day's data
-    has been processed — typically several hours later.  Requiring a positive
-    usage total ensures sensors never show a partial day's figures.
+    GloBird posts a new day's entry shortly after midnight with zero values;
+    the real data arrives hours later.  We require at least one of
+    ``latest_day_usage`` (grid import) or ``latest_day_export`` (solar export)
+    to be non-zero before accepting the data as complete.
 
-    Note: the ``latest_intervals`` array is not used here because GloBird
-    returns all-zero interval arrays even for complete days, making interval
-    count an unreliable completeness signal.
+    Using OR rather than AND handles legitimate edge cases:
+    - A day where battery + solar covered all consumption → import may be 0.
+    - A cloudy/rainy day with no solar generation → export may be 0.
+    Only if both are zero simultaneously is the data considered incomplete.
     """
     if not usage_summary or usage_summary.get("latest_day") is None:
         return False
-    return (usage_summary.get("latest_day_usage") or 0) > 0
+    return (
+        (usage_summary.get("latest_day_usage") or 0) > 0
+        or (usage_summary.get("latest_day_export") or 0) > 0
+    )
 
 
 class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -205,15 +209,16 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
                 usage_summary = fresh_detail.get("usage_summary") or {}
                 if not _is_usage_complete(usage_summary) and isinstance(cached_detail, dict):
-                    # Usage data for the latest day is not yet fully published
-                    # (latest_day_usage is zero or absent).  Retain the previously
+                    # Neither import nor export has a non-zero value for the latest
+                    # day — data is not yet fully published.  Retain the previously
                     # confirmed service data so sensors do not update with partial values.
                     _LOGGER.debug(
                         "GloBird service %s: usage data incomplete "
-                        "(latest_day=%s, latest_day_usage=%s); retaining cached data.",
+                        "(latest_day=%s, import=%s, export=%s); retaining cached data.",
                         sid,
                         usage_summary.get("latest_day"),
                         usage_summary.get("latest_day_usage"),
+                        usage_summary.get("latest_day_export"),
                     )
                     service_data[sid] = cached_detail
                 else:
