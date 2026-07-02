@@ -64,6 +64,9 @@
       "latest_day_solar_export": {
         "name": "Latest Day Solar Export"
       },
+      "latest_day_super_export": {
+        "name": "Latest Day Super Export"
+      },
       "cost_total": {
         "name": "Recent Cost Total"
       },
