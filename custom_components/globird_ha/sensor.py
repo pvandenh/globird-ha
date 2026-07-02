@@ -219,6 +219,7 @@ async def async_setup_entry(
                 GloBirdLatestDayUsageSensor(coordinator, config_entry, service),
                 GloBirdSolarExportTotalSensor(coordinator, config_entry, service),
                 GloBirdLatestDaySolarExportSensor(coordinator, config_entry, service),
+                GloBirdLatestDaySuperExportSensor(coordinator, config_entry, service),
                 GloBirdCostTotalSensor(coordinator, config_entry, service),
                 GloBirdLatestDayCostSensor(coordinator, config_entry, service),
                 GloBirdZeroHeroStatusSensor(coordinator, config_entry, service),
@@ -565,6 +566,31 @@ class GloBirdLatestDaySolarExportSensor(GloBirdServiceBaseSensor):
         return attrs
 
 
+class GloBirdLatestDaySuperExportSensor(GloBirdServiceBaseSensor):
+    """Latest day Super Export / ZeroHero top-up sensor (ADDON_FEED_IN rows)."""
+
+    sensor_key = "latest_day_super_export"
+    sensor_name = "Latest Day Super Export"
+    icon = "mdi:lightning-bolt"
+    native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    device_class = SensorDeviceClass.ENERGY
+    state_class = SensorStateClass.TOTAL
+
+    @property
+    def native_value(self) -> Any:
+        """Return latest day Super Export kWh."""
+        return (self._service_detail().get("usage_summary") or {}).get("latest_day_super_export")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return latest day Super Export attributes."""
+        attrs = self._service_attrs()
+        summary = self._service_detail().get("usage_summary") or {}
+        attrs["total_super_export"] = summary.get("total_super_export")
+        attrs["super_export_daily"] = summary.get("super_export_daily")
+        return attrs
+
+
 class GloBirdCostTotalSensor(GloBirdServiceBaseSensor):
     """Recent cost total sensor."""
 
@@ -665,7 +691,7 @@ class GloBirdExpectedMonthlyCostSensor(GloBirdServiceBaseSensor):
 
     sensor_key = "expected_month_cost"
     sensor_name = "Expected Monthly Cost"
-    icon = "mdi:calendar-question"
+    icon = "mdi:cash-calendar"
     native_unit_of_measurement = CURRENCY_AUD
     device_class = SensorDeviceClass.MONETARY
     state_class = None

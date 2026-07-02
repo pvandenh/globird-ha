@@ -378,8 +378,23 @@ def _usage_register_key(row: dict[str, Any]) -> str:
 
 
 def _is_export_register(row: dict[str, Any]) -> bool:
-    """Return whether a usage row represents export/feed-in energy."""
+    """Return whether a usage row is on the export/feed-in register (B1)."""
     return str(row.get("suffix") or "").upper().startswith("B")
+
+
+def _is_super_export_register(row: dict[str, Any]) -> bool:
+    """Return whether a row is a financial Super Export / ZeroHero top-up.
+
+    GloBird reports the energy exported during a premium window (e.g. 6-9 pm)
+    twice: once in the base SOLAR rows (physical kWh) and again as an
+    ADDON_FEED_IN top-up row (the bonus rate credit for the same kWh).
+    This helper identifies the top-up rows so they can be surfaced as a
+    separate sensor rather than being double-counted in the export total.
+    """
+    return (
+        _is_export_register(row)
+        and str(row.get("chargeCategoryCode") or "").upper() == "ADDON_FEED_IN"
+    )
 
 
 def _build_usage_register_summaries(
@@ -427,14 +442,23 @@ def build_usage_summary(
             "total_export": None,
             "latest_day_export": None,
             "export_daily": [],
+            "total_super_export": None,
+            "latest_day_super_export": None,
+            "super_export_daily": [],
             "registers": [],
         }
 
     import_rows = [r for r in rows if not _is_export_register(r)]
-    export_rows = [r for r in rows if _is_export_register(r)]
+    # Physical solar export only (SOLAR category) — excludes ADDON_FEED_IN top-up rows
+    # that GloBird adds for the Super Export / ZeroHero premium window.  Those rows
+    # cover the same kWh already counted in the SOLAR rows, so including them would
+    # double-count export during that window.
+    solar_export_rows = [r for r in rows if _is_export_register(r) and not _is_super_export_register(r)]
+    super_export_rows = [r for r in rows if _is_super_export_register(r)]
 
     import_summary = _build_register_summary(import_rows)
-    export_summary = _build_register_summary(export_rows)
+    export_summary = _build_register_summary(solar_export_rows)
+    super_export_summary = _build_register_summary(super_export_rows)
 
     return {
         "days": import_summary["days"],
@@ -446,6 +470,9 @@ def build_usage_summary(
         "total_export": export_summary["total"],
         "latest_day_export": export_summary["latest_day_usage"],
         "export_daily": export_summary["daily"],
+        "total_super_export": super_export_summary["total"],
+        "latest_day_super_export": super_export_summary["latest_day_usage"],
+        "super_export_daily": super_export_summary["daily"],
         "registers": _build_usage_register_summaries(rows),
     }
 
